@@ -69,7 +69,6 @@ bot.command("inbox", async (ctx) => {
 
     const username = email.split("@")[0];
 
-    // Example inbox url
     const url = `https://www.minuteinbox.com/index.php?login=${username}`;
 
     const response = await axios.get(url);
@@ -79,10 +78,21 @@ bot.command("inbox", async (ctx) => {
     let messages = [];
 
     $("table tr").each((i, el) => {
-      const text = $(el).text().trim();
 
-      if (text.length > 5) {
-        messages.push(text);
+      // skip table header
+      if (i === 0) return;
+
+      const cols = $(el).find("td");
+
+      if (cols.length >= 3) {
+
+        const from = $(cols[0]).text().trim();
+        const subject = $(cols[1]).text().trim();
+        const time = $(cols[2]).text().trim();
+
+        messages.push(
+          `📨 From: ${from}\n📄 Subject: ${subject}\n⏰ Time: ${time}`
+        );
       }
     });
 
@@ -90,9 +100,7 @@ bot.command("inbox", async (ctx) => {
       return ctx.reply("📭 Inbox Empty");
     }
 
-    const latest = messages.slice(0, 5).join("\n\n");
-
-    ctx.reply(`📨 Inbox Messages:\n\n${latest}`);
+    ctx.reply(messages.slice(0, 5).join("\n\n"));
 
   } catch (err) {
     console.log(err);
