@@ -1,7 +1,7 @@
 import { Telegraf } from "telegraf";
 import { BOT_TOKEN } from "./config.js";
 import fs from "fs";
-import fetch from "node-fetch";
+import axios from "axios";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegPath from "ffmpeg-static";
 
@@ -10,38 +10,53 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 const bot = new Telegraf(BOT_TOKEN);
 
 bot.start((ctx) => {
-  ctx.reply("🎤 Send me a voice message, I will convert it to MP3 🎧");
+  ctx.reply("🎤 Send voice message\nI will convert it to MP3 🎧");
 });
 
 bot.on("voice", async (ctx) => {
   try {
     const fileId = ctx.message.voice.file_id;
+
     const file = await ctx.telegram.getFile(fileId);
+    if (!file.file_path) {
+      return ctx.reply("❌ File not found!");
+    }
 
-    const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
+    const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
 
-    const inputPath = `voice.ogg`;
-    const outputPath = `audio.mp3`;
+    const input = "voice.ogg";
+    const output = "voice.mp3";
 
-    const res = await fetch(fileUrl);
-    const buffer = await res.buffer();
-    fs.writeFileSync(inputPath, buffer);
+    const response = await axios({
+      url,
+      method: "GET",
+      responseType: "stream"
+    });
 
-    ffmpeg(inputPath)
-      .toFormat("mp3")
-      .save(outputPath)
-      .on("end", () => {
-        ctx.replyWithAudio({ source: fs.createReadStream(outputPath) });
+    const writer = fs.createWriteStream(input);
+    response.data.pipe(writer);
 
-        fs.unlinkSync(inputPath);
-        fs.unlinkSync(outputPath);
-      });
+    writer.on("finish", () => {
+      ffmpeg(input)
+        .toFormat("mp3")
+        .on("error", (err) => {
+          console.log("FFMPEG ERROR:", err);
+          ctx.reply("❌ Conversion failed!");
+        })
+        .on("end", () => {
+          ctx.replyWithAudio({ source: fs.createReadStream(output) });
 
-  } catch (error) {
-    console.log(error);
-    ctx.reply("❌ Error converting voice!");
+          fs.unlinkSync(input);
+          fs.unlinkSync(output);
+        })
+        .save(output);
+    });
+
+  } catch (err) {
+    console.log("BOT ERROR:", err);
+    ctx.reply("❌ Something went wrong!");
   }
 });
 
 bot.launch();
-console.log("Bot is running...");
+console.log("🤖 Bot is running...");
