@@ -1,6 +1,5 @@
 import { Telegraf } from "telegraf";
 import axios from "axios";
-import * as cheerio from "cheerio";
 import fs from "fs";
 import { BOT_TOKEN } from "./config.js";
 
@@ -8,11 +7,9 @@ const bot = new Telegraf(BOT_TOKEN);
 
 const USERS_FILE = "./users.json";
 
+// load/save
 function loadUsers() {
-  if (!fs.existsSync(USERS_FILE)) {
-    fs.writeFileSync(USERS_FILE, JSON.stringify({}));
-  }
-
+  if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, "{}");
   return JSON.parse(fs.readFileSync(USERS_FILE));
 }
 
@@ -23,96 +20,101 @@ function saveUsers(data) {
 // START
 bot.start((ctx) => {
   ctx.reply(
-    `📩 Welcome To MinuteInbox Bot\n\nCommands:\n/newmail - Generate Mail\n/inbox - Check Inbox`
+    "📩 Temp Mail Bot Ready\n\nCommands:\n/newmail - Create Email\n/inbox - Check Inbox"
   );
 });
 
-// GENERATE TEMP MAIL
+// CREATE MAIL (Mail.tm API)
 bot.command("newmail", async (ctx) => {
   try {
     const userId = ctx.from.id;
 
-    const random = Math.random().toString(36).substring(2, 10);
+    // get domains
+    const domainRes = await axios.get("https://api.mail.tm/domains");
+    const domain = domainRes.data["hydra:member"][0].domain;
 
-    const mail = `${random}@minuteinbox.com`;
+    const random = Math.random().toString(36).substring(2, 10);
+    const email = `${random}@${domain}`;
+    const password = "12345678";
+
+    // create account
+    await axios.post("https://api.mail.tm/accounts", {
+      address: email,
+      password: password
+    });
 
     const users = loadUsers();
 
     users[userId] = {
-      email: mail
+      email,
+      password,
+      token: null
     };
 
     saveUsers(users);
 
-    ctx.reply(
-      `✅ Temporary Mail Created\n\n📧 ${mail}`
-    );
+    ctx.reply(`✅ Temporary Mail Created\n\n📧 ${email}`);
 
   } catch (err) {
-    console.log(err);
-    ctx.reply("❌ Failed to generate mail");
+    console.log(err.response?.data || err);
+    ctx.reply("❌ Failed to create mail");
   }
 });
 
-// CHECK INBOX
+// GET TOKEN
+async function getToken(email, password) {
+  const res = await axios.post("https://api.mail.tm/token", {
+    address: email,
+    password: password
+  });
+
+  return res.data.token;
+}
+
+// INBOX
 bot.command("inbox", async (ctx) => {
   try {
     const userId = ctx.from.id;
-
     const users = loadUsers();
 
     if (!users[userId]) {
-      return ctx.reply("❌ First create mail using /newmail");
+      return ctx.reply("❌ First use /newmail");
     }
 
-    const email = users[userId].email;
+    const { email, password } = users[userId];
 
-    const username = email.split("@")[0];
+    const token = await getToken(email, password);
 
-    const url = `https://www.minuteinbox.com/index.php?login=${username}`;
-
-    const response = await axios.get(url);
-
-    const $ = cheerio.load(response.data);
-
-    let messages = [];
-
-    $("table tr").each((i, el) => {
-
-      // skip table header
-      if (i === 0) return;
-
-      const cols = $(el).find("td");
-
-      if (cols.length >= 3) {
-
-        const from = $(cols[0]).text().trim();
-        const subject = $(cols[1]).text().trim();
-        const time = $(cols[2]).text().trim();
-
-        messages.push(
-          `📨 From: ${from}\n📄 Subject: ${subject}\n⏰ Time: ${time}`
-        );
+    const res = await axios.get("https://api.mail.tm/messages", {
+      headers: {
+        Authorization: `Bearer ${token}`
       }
     });
 
-    if (messages.length === 0) {
+    const messages = res.data["hydra:member"];
+
+    if (!messages || messages.length === 0) {
       return ctx.reply("📭 Inbox Empty");
     }
 
-    ctx.reply(messages.slice(0, 5).join("\n\n"));
+    let output = "";
+
+    messages.slice(0, 5).forEach((m) => {
+      output += `📨 From: ${m.from.address}\n`;
+      output += `📄 Subject: ${m.subject}\n`;
+      output += `⏰ Date: ${m.createdAt}\n\n`;
+    });
+
+    ctx.reply(output);
 
   } catch (err) {
-    console.log(err);
-    ctx.reply("❌ Failed to fetch inbox");
+    console.log(err.response?.data || err);
+    ctx.reply("❌ Inbox fetch failed");
   }
 });
 
 // ERROR HANDLER
-bot.catch((err) => {
-  console.log("Bot Error:", err);
-});
+bot.catch((err) => console.log("Bot Error:", err));
 
 bot.launch();
-
-console.log("📩 MinuteInbox Bot Running...");
+console.log("📩 Temp Mail Bot Running...");
