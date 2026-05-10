@@ -5,66 +5,84 @@ import { BOT_TOKEN } from "./config.js";
 
 const bot = new Telegraf(BOT_TOKEN);
 
-const USERS_FILE = "./users.json";
+const FILE = "./users.json";
 
-/* ================= DB ================= */
+/* ================= FILE ================= */
 
-function loadUsers() {
-  if (!fs.existsSync(USERS_FILE)) {
-    fs.writeFileSync(USERS_FILE, "{}");
+function load() {
+  if (!fs.existsSync(FILE)) {
+    fs.writeFileSync(FILE, JSON.stringify({ pool: [], used: {} }, null, 2));
   }
-  return JSON.parse(fs.readFileSync(USERS_FILE));
+  return JSON.parse(fs.readFileSync(FILE));
 }
 
-function saveUsers(data) {
-  fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 2));
+function save(data) {
+  fs.writeFileSync(FILE, JSON.stringify(data, null, 2));
 }
+
+/* ================= PRE-GENERATE MAILS ================= */
+
+async function generateMail() {
+  const domainRes = await axios.get("https://api.mail.tm/domains");
+  const domain = domainRes.data["hydra:member"][0].domain;
+
+  const random = Math.random().toString(36).substring(2, 10);
+  const email = `${random}@${domain}`;
+  const password = "12345678";
+
+  await axios.post("https://api.mail.tm/accounts", {
+    address: email,
+    password
+  });
+
+  return { email, password };
+}
+
+/* ================= REFILL POOL ================= */
+
+async function refillPool() {
+  const data = load();
+
+  while (data.pool.length < 10) {
+    try {
+      const mail = await generateMail();
+      data.pool.push(mail);
+    } catch (e) {
+      console.log("Refill error");
+    }
+  }
+
+  save(data);
+}
+
+setInterval(refillPool, 60000); // every 1 min
 
 /* ================= START ================= */
 
 bot.start((ctx) => {
-  ctx.reply(
-`📩 Temp Mail Bot Ready
-
-Commands:
-/newmail - Create Email
-/inbox - Check Inbox
-/copy_0 - Copy Subject`
-  );
+  ctx.reply("📩 Temp Mail Bot Ready\n\n/newmail - Instant Mail\n/inbox - Check Mail");
 });
 
-/* ================= NEW MAIL ================= */
+/* ================= INSTANT MAIL ================= */
 
 bot.command("newmail", async (ctx) => {
   try {
-    const userId = ctx.from.id;
+    const data = load();
 
-    const domainRes = await axios.get("https://api.mail.tm/domains");
-    const domain = domainRes.data["hydra:member"]?.[0]?.domain;
+    if (data.pool.length === 0) {
+      await refillPool();
+    }
 
-    const random = Math.random().toString(36).substring(2, 10);
-    const email = `${random}@${domain}`;
-    const password = "12345678";
+    const mail = data.pool.pop();
 
-    await axios.post("https://api.mail.tm/accounts", {
-      address: email,
-      password
-    });
+    data.used[ctx.from.id] = mail;
+    save(data);
 
-    const users = loadUsers();
-    users[userId] = {
-      email,
-      password,
-      lastMessages: []
-    };
-
-    saveUsers(users);
-
-    ctx.reply(`✅ Mail Created\n\n📧 ${email}`);
+    ctx.reply(`⚡ Instant Mail Ready\n\n📧 ${mail.email}`);
 
   } catch (err) {
-    console.log(err?.response?.data || err.message);
-    ctx.reply("❌ Mail create failed");
+    console.log(err);
+    ctx.reply("❌ Try again");
   }
 });
 
@@ -83,16 +101,12 @@ async function getToken(email, password) {
 
 bot.command("inbox", async (ctx) => {
   try {
-    const userId = ctx.from.id;
-    const users = loadUsers();
+    const data = load();
+    const mail = data.used[ctx.from.id];
 
-    if (!users[userId]) {
-      return ctx.reply("❌ Use /newmail first");
-    }
+    if (!mail) return ctx.reply("❌ First use /newmail");
 
-    const { email, password } = users[userId];
-
-    const token = await getToken(email, password);
+    const token = await getToken(mail.email, mail.password);
 
     const res = await axios.get("https://api.mail.tm/messages", {
       headers: {
@@ -102,63 +116,20 @@ bot.command("inbox", async (ctx) => {
 
     const messages = res.data["hydra:member"];
 
-    if (!messages || messages.length === 0) {
-      return ctx.reply("📭 Inbox Empty");
-    }
+    if (!messages.length) return ctx.reply("📭 Inbox Empty");
 
-    const latest = messages.slice(0, 5);
+    let text = "";
 
-    // save messages for copy system
-    users[userId].lastMessages = latest;
-    saveUsers(users);
-
-    let text = "📨 Inbox Messages:\n\n";
-
-    latest.forEach((m, i) => {
-      text += `📩 From: ${m.from.address}\n`;
-      text += `📄 Subject: /copy_${i}\n`;
-      text += `⏰ Time: ${m.createdAt}\n\n`;
+    messages.slice(0, 5).forEach(m => {
+      text += `📩 ${m.from.address}\n📄 ${m.subject}\n\n`;
     });
 
     ctx.reply(text);
 
   } catch (err) {
-    console.log(err?.response?.data || err.message);
-    ctx.reply("❌ Inbox failed");
+    ctx.reply("❌ Inbox error");
   }
 });
-
-/* ================= COPY SYSTEM ================= */
-
-bot.command("copy_", async (ctx) => {
-  try {
-    const userId = ctx.from.id;
-    const users = loadUsers();
-
-    const index = ctx.message.text.split("_")[1];
-
-    if (!users[userId]?.lastMessages) {
-      return ctx.reply("❌ No data found");
-    }
-
-    const msg = users[userId].lastMessages[index];
-
-    if (!msg) {
-      return ctx.reply("❌ Invalid message");
-    }
-
-    ctx.reply(`📋 Copied Subject:\n\n${msg.subject}`);
-
-  } catch (err) {
-    console.log(err);
-    ctx.reply("❌ Copy failed");
-  }
-});
-
-/* ================= ERROR HANDLER ================= */
-
-bot.catch((err) => console.log("BOT ERROR:", err));
 
 bot.launch();
-
-console.log("📩 Temp Mail Bot Running...");
+console.log("⚡ FAST Temp Mail Bot Running...");
