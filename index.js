@@ -20,9 +20,29 @@ function save(data) {
   fs.writeFileSync(FILE, JSON.stringify(data, null, 2));
 }
 
-/* ================= PRE-GENERATE MAILS ================= */
+/* ================= BUTTON MENU ================= */
 
-async function generateMail() {
+function mainMenu() {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "⚡ New Gmail Generate", callback_data: "newmail" }],
+        [{ text: "📥 Mail Check", callback_data: "inbox" }],
+        [{ text: "🆘 Admin Support", url: "https://t.me/Smart_Method_Owner" }]
+      ]
+    }
+  };
+}
+
+/* ================= START ================= */
+
+bot.start((ctx) => {
+  ctx.reply("📩 Temp Mail Bot\n\nChoose option:", mainMenu());
+});
+
+/* ================= MAIL GENERATE ================= */
+
+async function createMail() {
   const domainRes = await axios.get("https://api.mail.tm/domains");
   const domain = domainRes.data["hydra:member"][0].domain;
 
@@ -38,55 +58,7 @@ async function generateMail() {
   return { email, password };
 }
 
-/* ================= REFILL POOL ================= */
-
-async function refillPool() {
-  const data = load();
-
-  while (data.pool.length < 10) {
-    try {
-      const mail = await generateMail();
-      data.pool.push(mail);
-    } catch (e) {
-      console.log("Refill error");
-    }
-  }
-
-  save(data);
-}
-
-setInterval(refillPool, 60000); // every 1 min
-
-/* ================= START ================= */
-
-bot.start((ctx) => {
-  ctx.reply("📩 Temp Mail Bot Ready\n\n/newmail - Instant Mail\n/inbox - Check Mail");
-});
-
-/* ================= INSTANT MAIL ================= */
-
-bot.command("newmail", async (ctx) => {
-  try {
-    const data = load();
-
-    if (data.pool.length === 0) {
-      await refillPool();
-    }
-
-    const mail = data.pool.pop();
-
-    data.used[ctx.from.id] = mail;
-    save(data);
-
-    ctx.reply(`⚡ Instant Mail Ready\n\n📧 ${mail.email}`);
-
-  } catch (err) {
-    console.log(err);
-    ctx.reply("❌ Try again");
-  }
-});
-
-/* ================= TOKEN ================= */
+/* ================= GET TOKEN ================= */
 
 async function getToken(email, password) {
   const res = await axios.post("https://api.mail.tm/token", {
@@ -97,39 +69,74 @@ async function getToken(email, password) {
   return res.data.token;
 }
 
-/* ================= INBOX ================= */
+/* ================= CALLBACK HANDLER ================= */
 
-bot.command("inbox", async (ctx) => {
+bot.on("callback_query", async (ctx) => {
+  const data = load();
+
   try {
-    const data = load();
-    const mail = data.used[ctx.from.id];
+    const action = ctx.callbackQuery.data;
+    const userId = ctx.from.id;
 
-    if (!mail) return ctx.reply("❌ First use /newmail");
+    /* ================= NEW MAIL ================= */
+    if (action === "newmail") {
 
-    const token = await getToken(mail.email, mail.password);
+      const mail = await createMail();
 
-    const res = await axios.get("https://api.mail.tm/messages", {
-      headers: {
-        Authorization: `Bearer ${token}`
+      data.used[userId] = mail;
+      save(data);
+
+      return ctx.editMessageText(
+        `📧 Your Mail Ready:\n\n${mail.email}`,
+        mainMenu()
+      );
+    }
+
+    /* ================= INBOX ================= */
+    if (action === "inbox") {
+
+      const mail = data.used[userId];
+
+      if (!mail) {
+        return ctx.editMessageText(
+          "❌ First generate mail",
+          mainMenu()
+        );
       }
-    });
 
-    const messages = res.data["hydra:member"];
+      const token = await getToken(mail.email, mail.password);
 
-    if (!messages.length) return ctx.reply("📭 Inbox Empty");
+      const res = await axios.get("https://api.mail.tm/messages", {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
 
-    let text = "";
+      const messages = res.data["hydra:member"];
 
-    messages.slice(0, 5).forEach(m => {
-      text += `📩 ${m.from.address}\n📄 ${m.subject}\n\n`;
-    });
+      if (!messages.length) {
+        return ctx.editMessageText(
+          "📭 Inbox Empty",
+          mainMenu()
+        );
+      }
 
-    ctx.reply(text);
+      let text = "📨 Inbox:\n\n";
+
+      messages.slice(0, 5).forEach(m => {
+        text += `📩 From: ${m.from.address}\n📄 ${m.subject}\n\n`;
+      });
+
+      return ctx.editMessageText(text, mainMenu());
+    }
 
   } catch (err) {
-    ctx.reply("❌ Inbox error");
+    console.log(err);
+    ctx.reply("❌ Error occurred");
   }
 });
 
+/* ================= BOT ================= */
+
 bot.launch();
-console.log("⚡ FAST Temp Mail Bot Running...");
+console.log("📩 Smart Temp Mail Bot Running...");
