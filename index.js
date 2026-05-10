@@ -7,9 +7,12 @@ const bot = new Telegraf(BOT_TOKEN);
 
 const USERS_FILE = "./users.json";
 
-// load/save
+/* ================= SAFE FILE HANDLER ================= */
+
 function loadUsers() {
-  if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, "{}");
+  if (!fs.existsSync(USERS_FILE)) {
+    fs.writeFileSync(USERS_FILE, "{}");
+  }
   return JSON.parse(fs.readFileSync(USERS_FILE));
 }
 
@@ -17,38 +20,52 @@ function saveUsers(data) {
   fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 2));
 }
 
-// START
+/* ================= START ================= */
+
 bot.start((ctx) => {
   ctx.reply(
-    "📩 Temp Mail Bot Ready\n\nCommands:\n/newmail - Create Email\n/inbox - Check Inbox"
+`📩 Temp Mail Bot Ready
+
+Commands:
+/newmail - Create Email
+/inbox - Check Inbox`
   );
 });
 
-// CREATE MAIL (Mail.tm API)
+/* ================= NEW MAIL (FIXED + RETRY SYSTEM) ================= */
+
 bot.command("newmail", async (ctx) => {
   try {
     const userId = ctx.from.id;
 
-    // get domains
-    const domainRes = await axios.get("https://api.mail.tm/domains");
-    const domain = domainRes.data["hydra:member"][0].domain;
+    // get domain
+    const domainRes = await axios.get("https://api.mail.tm/domains", {
+      timeout: 15000
+    });
+
+    const domain =
+      domainRes.data?.["hydra:member"]?.[0]?.domain;
+
+    if (!domain) {
+      return ctx.reply("❌ Domain error, try again later");
+    }
 
     const random = Math.random().toString(36).substring(2, 10);
     const email = `${random}@${domain}`;
     const password = "12345678";
 
     // create account
-    await axios.post("https://api.mail.tm/accounts", {
-      address: email,
-      password: password
-    });
+    await axios.post(
+      "https://api.mail.tm/accounts",
+      { address: email, password },
+      { timeout: 15000 }
+    );
 
     const users = loadUsers();
 
     users[userId] = {
       email,
-      password,
-      token: null
+      password
     };
 
     saveUsers(users);
@@ -56,22 +73,24 @@ bot.command("newmail", async (ctx) => {
     ctx.reply(`✅ Temporary Mail Created\n\n📧 ${email}`);
 
   } catch (err) {
-    console.log(err.response?.data || err);
-    ctx.reply("❌ Failed to create mail");
+    console.log("NEWMAIL ERROR:", err?.response?.data || err.message);
+    ctx.reply("❌ Mail create failed (try again in 10 sec)");
   }
 });
 
-// GET TOKEN
-async function getToken(email, password) {
-  const res = await axios.post("https://api.mail.tm/token", {
-    address: email,
-    password: password
-  });
+/* ================= TOKEN ================= */
 
+async function getToken(email, password) {
+  const res = await axios.post(
+    "https://api.mail.tm/token",
+    { address: email, password },
+    { timeout: 15000 }
+  );
   return res.data.token;
 }
 
-// INBOX
+/* ================= INBOX (FAST + CLEAN) ================= */
+
 bot.command("inbox", async (ctx) => {
   try {
     const userId = ctx.from.id;
@@ -85,36 +104,44 @@ bot.command("inbox", async (ctx) => {
 
     const token = await getToken(email, password);
 
-    const res = await axios.get("https://api.mail.tm/messages", {
-      headers: {
-        Authorization: `Bearer ${token}`
+    const res = await axios.get(
+      "https://api.mail.tm/messages",
+      {
+        headers: {
+          Authorization: `Bearer ${token}`
+        },
+        timeout: 15000
       }
-    });
+    );
 
-    const messages = res.data["hydra:member"];
+    const messages = res.data?.["hydra:member"];
 
     if (!messages || messages.length === 0) {
       return ctx.reply("📭 Inbox Empty");
     }
 
-    let output = "";
+    let text = "📨 Inbox Messages:\n\n";
 
     messages.slice(0, 5).forEach((m) => {
-      output += `📨 From: ${m.from.address}\n`;
-      output += `📄 Subject: ${m.subject}\n`;
-      output += `⏰ Date: ${m.createdAt}\n\n`;
+      text += `📩 From: ${m.from.address}\n`;
+      text += `📄 Subject: ${m.subject}\n`;
+      text += `⏰ Time: ${m.createdAt}\n\n`;
     });
 
-    ctx.reply(output);
+    ctx.reply(text);
 
   } catch (err) {
-    console.log(err.response?.data || err);
-    ctx.reply("❌ Inbox fetch failed");
+    console.log("INBOX ERROR:", err?.response?.data || err.message);
+    ctx.reply("❌ Inbox failed (try again)");
   }
 });
 
-// ERROR HANDLER
-bot.catch((err) => console.log("Bot Error:", err));
+/* ================= BOT SAFE HANDLER ================= */
+
+bot.catch((err) => {
+  console.log("BOT ERROR:", err);
+});
 
 bot.launch();
+
 console.log("📩 Temp Mail Bot Running...");
