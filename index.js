@@ -1,63 +1,110 @@
 import { Telegraf } from "telegraf";
-import { BOT_TOKEN } from "./config.js";
+import axios from "axios";
+import cheerio from "cheerio";
 import fs from "fs";
-import fetch from "node-fetch";
-import ffmpeg from "fluent-ffmpeg";
-import ffmpegPath from "ffmpeg-static";
-
-ffmpeg.setFfmpegPath(ffmpegPath);
+import { BOT_TOKEN } from "./config.js";
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// START MESSAGE
+const USERS_FILE = "./users.json";
+
+function loadUsers() {
+  if (!fs.existsSync(USERS_FILE)) {
+    fs.writeFileSync(USERS_FILE, JSON.stringify({}));
+  }
+
+  return JSON.parse(fs.readFileSync(USERS_FILE));
+}
+
+function saveUsers(data) {
+  fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 2));
+}
+
+// START
 bot.start((ctx) => {
-  ctx.reply("🎤 Send me a voice message\nI will convert it to MP3 🎧");
+  ctx.reply(
+    `📩 Welcome To MinuteInbox Bot\n\nCommands:\n/newmail - Generate Mail\n/inbox - Check Inbox`
+  );
 });
 
-// VOICE HANDLER
-bot.on("voice", async (ctx) => {
+// GENERATE TEMP MAIL
+bot.command("newmail", async (ctx) => {
   try {
-    const fileId = ctx.message.voice.file_id;
+    const userId = ctx.from.id;
 
-    const file = await ctx.telegram.getFile(fileId);
-    const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
+    const random = Math.random().toString(36).substring(2, 10);
 
-    const inputFile = "voice.ogg";
-    const outputFile = "audio.mp3";
+    const mail = `${random}@minuteinbox.com`;
 
-    const res = await fetch(fileUrl);
-    const buffer = await res.arrayBuffer();
-    fs.writeFileSync(inputFile, Buffer.from(buffer));
+    const users = loadUsers();
 
-    // convert with promise (IMPORTANT FIX)
-    await new Promise((resolve, reject) => {
-      ffmpeg(inputFile)
-        .toFormat("mp3")
-        .save(outputFile)
-        .on("end", resolve)
-        .on("error", reject);
-    });
+    users[userId] = {
+      email: mail
+    };
 
-    // send file only if exists
-    if (fs.existsSync(outputFile)) {
-      await ctx.replyWithAudio({ source: fs.createReadStream(outputFile) });
+    saveUsers(users);
 
-      fs.unlinkSync(inputFile);
-      fs.unlinkSync(outputFile);
-    } else {
-      ctx.reply("❌ MP3 file generate হয়নি!");
-    }
+    ctx.reply(
+      `✅ Temporary Mail Created\n\n📧 ${mail}`
+    );
 
-  } catch (error) {
-    console.log(error);
-    ctx.reply("❌ Something went wrong!");
+  } catch (err) {
+    console.log(err);
+    ctx.reply("❌ Failed to generate mail");
   }
 });
 
-// ERROR HANDLING (important for Railway)
+// CHECK INBOX
+bot.command("inbox", async (ctx) => {
+  try {
+    const userId = ctx.from.id;
+
+    const users = loadUsers();
+
+    if (!users[userId]) {
+      return ctx.reply("❌ First create mail using /newmail");
+    }
+
+    const email = users[userId].email;
+
+    const username = email.split("@")[0];
+
+    // Example inbox url
+    const url = `https://www.minuteinbox.com/index.php?login=${username}`;
+
+    const response = await axios.get(url);
+
+    const $ = cheerio.load(response.data);
+
+    let messages = [];
+
+    $("table tr").each((i, el) => {
+      const text = $(el).text().trim();
+
+      if (text.length > 5) {
+        messages.push(text);
+      }
+    });
+
+    if (messages.length === 0) {
+      return ctx.reply("📭 Inbox Empty");
+    }
+
+    const latest = messages.slice(0, 5).join("\n\n");
+
+    ctx.reply(`📨 Inbox Messages:\n\n${latest}`);
+
+  } catch (err) {
+    console.log(err);
+    ctx.reply("❌ Failed to fetch inbox");
+  }
+});
+
+// ERROR HANDLER
 bot.catch((err) => {
-  console.log("Bot error:", err);
+  console.log("Bot Error:", err);
 });
 
 bot.launch();
-console.log("🤖 Voice to MP3 Bot is running...");
+
+console.log("📩 MinuteInbox Bot Running...");
