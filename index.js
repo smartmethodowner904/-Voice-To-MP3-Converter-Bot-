@@ -1,6 +1,6 @@
 import { Telegraf } from "telegraf";
 import axios from "axios";
-import cheerio from "cheerio";
+import * as cheerio from "cheerio";
 import fs from "fs";
 import { BOT_TOKEN } from "./config.js";
 
