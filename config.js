@@ -1,0 +1,2 @@
+export const BOT_TOKEN = "8661586229:AAGY77SvECBOjmTaOmNAdV3nJWQDkxng0KU";
+export const ADMIN_ID = 8136997138;
